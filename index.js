@@ -225,6 +225,36 @@ async function lockForUpdateRetry(label, isolationLevel) {
 lockForUpdateRetry.description =
   'lock for update, repeatable read, with retries';
 
+async function upsert(label, isolationLevel) {
+  let transaction;
+  try {
+    await T.upsert({ id: 1 }, { where: { id: 1 } });
+    // row is guaranteed to exist now
+
+    try {
+      transaction = await sequelize.transaction({
+        isolationLevel,
+      });
+
+      const row = await T.findOne({
+        where: { id: 1 },
+        transaction,
+        lock: transaction.LOCK.UPDATE,
+      });
+      const newCount = row.count ? row.count + 1 : 1;
+      row.count = newCount;
+      await row.save({ transaction });
+      await transaction.commit();
+    } catch (ex) {
+      exceptions.push({ strategy: getCaller(), exception: ex });
+      console.log(`${label}: caught ${ex}`);
+      await transaction.rollback();
+    }
+  } catch (ex) {
+    console.log('DEBUG: problem with upsert', ex);
+  }
+}
+
 // this one fails unless the one before it failed, in which case this one
 // doesn't run interleaved -- first txn runs to completion, so it succeeds
 // increment5.description = 'lock for update, read comitted';
@@ -267,6 +297,7 @@ async function main() {
     lockForUpdate,
     alwaysCreate,
     lockForUpdateRetry,
+    upsert,
   ]);
 
   const isolationLevels = [
