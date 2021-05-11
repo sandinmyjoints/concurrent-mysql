@@ -21,9 +21,12 @@ const shuffle = require('lodash/shuffle');
 
 const Sequelize = require('sequelize');
 global.Promise = Sequelize.Promise;
-const sequelize = new Sequelize(
-  `mysql://sd:${dbPassword}@127.0.0.1:3311/sd_prod`
-);
+const sequelize = new Sequelize('sd_prod', 'sd', dbPassword, {
+  dialect: 'mysql',
+  host: '127.0.0.1',
+  port: 3311,
+  pool: { max: 50 },
+});
 const T = sequelize.define(
   'T',
   {
@@ -317,7 +320,7 @@ async function main() {
     throw err;
   });
 
-  const numConcurrent = 4;
+  const numConcurrent = 6;
   const correctNoRow = numConcurrent;
   const correctOneRow = numConcurrent + 1;
 
