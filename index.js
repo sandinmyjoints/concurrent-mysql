@@ -21,9 +21,12 @@ const shuffle = require('lodash/shuffle');
 
 const Sequelize = require('sequelize');
 global.Promise = Sequelize.Promise;
-const sequelize = new Sequelize(
-  `mysql://sd:${dbPassword}@127.0.0.1:3311/sd_prod`
-);
+const sequelize = new Sequelize('sd_prod', 'sd', dbPassword, {
+  dialect: 'mysql',
+  host: '127.0.0.1',
+  port: 3311,
+  pool: { max: 50 },
+});
 const T = sequelize.define(
   'T',
   {
@@ -225,7 +228,7 @@ async function lockForUpdateRetry(label, isolationLevel) {
 lockForUpdateRetry.description =
   'lock for update, repeatable read, with retries';
 
-async function upsert(label, isolationLevel) {
+async function upsertTwoTxns(label, isolationLevel) {
   let transaction;
   try {
     await T.upsert({ id: 1 }, { where: { id: 1 } });
@@ -252,6 +255,35 @@ async function upsert(label, isolationLevel) {
     }
   } catch (ex) {
     console.log('DEBUG: problem with upsert', ex);
+  }
+}
+
+async function upsertOneTxn(label, isolationLevel) {
+  let transaction;
+  try {
+    transaction = await sequelize.transaction({
+      isolationLevel,
+    });
+    await T.upsert({ id: 1 }, { where: { id: 1 } }, { transaction });
+    // row is guaranteed to exist now only within transaction
+
+    const row = await T.findOne({
+      where: { id: 1 },
+      transaction,
+      lock: transaction.LOCK.UPDATE,
+    });
+    const newCount = row.count ? row.count + 1 : 1;
+    row.count = newCount;
+    await row.save({ transaction });
+    await transaction.commit();
+  } catch (ex) {
+    exceptions.push({ strategy: getCaller(), exception: ex });
+    console.log(`${label}: caught ${ex}`);
+    if (!transaction)
+      console.log(
+        `${label}: want to rollback but transaction is ${transaction}`
+      );
+    if (transaction) await transaction.rollback();
   }
 }
 
@@ -288,7 +320,7 @@ async function main() {
     throw err;
   });
 
-  const numConcurrent = 4;
+  const numConcurrent = 6;
   const correctNoRow = numConcurrent;
   const correctOneRow = numConcurrent + 1;
 
@@ -297,7 +329,8 @@ async function main() {
     lockForUpdate,
     alwaysCreate,
     lockForUpdateRetry,
-    upsert,
+    upsertTwoTxns,
+    upsertOneTxn,
   ]);
 
   const isolationLevels = [
